@@ -1,0 +1,29 @@
+{
+  "owner": "Frank2673",
+  "authorization": {
+    "statement": "以下资产由我本人拥有或控制，我授权本工具对其进行常规安全检查。",
+    "contact": "https://github.com/Frank2673"
+  },
+  "rate_limit": {
+    "concurrency": 4,
+    "delay_ms": 400,
+    "timeout_ms": 10000
+  },
+  "assets": [
+    {
+      "domain": "frank2673.github.io",
+      "tags": ["personal-site", "portfolio"],
+      "note": "个人主页（GitHub Pages 托管）"
+    }
+  ],
+  "checks": {
+    "dns": true,
+    "tls": true,
+    "headers": true,
+    "ct_logs": false,
+    "paths": {
+      "enabled": false,
+      "list": ["/.git/config", "/.env", "/.DS_Store", "/backup.zip", "/server-status", "/phpinfo.php"]
+    }
+  }
+}

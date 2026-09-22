@@ -1,0 +1,29 @@
+{
+  "owner": "demo",
+  "authorization": {
+    "statement": "演示用虚构资产（RFC 2606 保留域名 demo.example.com），不对应任何真实系统，仅用于离线演示流水线。",
+    "contact": "https://github.com/Frank2673"
+  },
+  "rate_limit": {
+    "concurrency": 4,
+    "delay_ms": 0,
+    "timeout_ms": 5000
+  },
+  "assets": [
+    {
+      "domain": "demo.example.com",
+      "tags": ["demo", "fictional"],
+      "note": "虚构演示资产：故意配置了一堆典型问题，用来展示报告长什么样"
+    }
+  ],
+  "checks": {
+    "dns": true,
+    "tls": true,
+    "headers": true,
+    "ct_logs": true,
+    "paths": {
+      "enabled": true,
+      "list": ["/.git/config", "/.env", "/.DS_Store", "/backup.zip", "/server-status", "/phpinfo.php"]
+    }
+  }
+}

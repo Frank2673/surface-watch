@@ -1,0 +1,33 @@
+# ===== 扫描产物（可能含敏感资产信息，不提交） =====
+out/
+out-*/
+state/
+*.report.md
+
+# ===== 系统文件 =====
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ===== 编辑器 =====
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ===== 日志与临时文件 =====
+*.log
+tmp/
+*.tmp
+*.tmpdir/
+
+# ===== 依赖（本项目零依赖，此处为防误装） =====
+node_modules/
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
+# ===== 本机工具链（不进入公开仓库） =====
+.dsh/
+AGENTS.md
+AGENTS.md.bak-*

@@ -1,0 +1,152 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ========== 单元测试：全部离线，不访问任何外部目标 ==========
+  test:
+    name: 单元测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 运行测试套件
+        run: node --test tests/
+
+      - name: 零依赖校验
+        run: node scripts/check-zero-deps.mjs
+
+  # ========== Scope Gate 行为验证：越权目标必须被拒绝 ==========
+  scope-gate:
+    name: 授权范围强制验证
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 范围外的资产必须被拒绝（退出码 2）
+        run: |
+          set +e
+          node src/index.mjs --scope fixtures/demo-scope.json \
+            --fixture fixtures/demo-observations.json \
+            --asset evil.example.net --out /tmp/gate-test > /tmp/gate.log 2>&1
+          code=$?
+          set -e
+          cat /tmp/gate.log
+          if [ "$code" -ne 2 ]; then
+            echo "❌ 期望退出码 2（运行错误），实际为 $code —— 范围校验可能失效"
+            exit 1
+          fi
+          echo "✅ 范围外资产被正确拒绝"
+
+      - name: 缺少授权声明时必须拒绝启动
+        run: |
+          cat > /tmp/no-auth.json <<'EOF'
+          { "owner": "test", "assets": [{ "domain": "example.com" }] }
+          EOF
+          set +e
+          node src/index.mjs --scope /tmp/no-auth.json --out /tmp/x > /tmp/noauth.log 2>&1
+          code=$?
+          set -e
+          cat /tmp/noauth.log
+          if [ "$code" -ne 2 ]; then
+            echo "❌ 缺少授权声明却未拒绝（退出码 $code）"
+            exit 1
+          fi
+          echo "✅ 缺少授权声明被正确拒绝"
+
+      - name: 内网/元数据地址必须被拒绝
+        run: |
+          cat > /tmp/bad-scope.json <<'EOF'
+          {
+            "owner": "test",
+            "authorization": { "statement": "测试用授权声明，长度足够" },
+            "assets": [{ "domain": "169.254.169.254" }]
+          }
+          EOF
+          set +e
+          node src/index.mjs --scope /tmp/bad-scope.json --out /tmp/gate-test2 > /tmp/gate2.log 2>&1
+          code=$?
+          set -e
+          cat /tmp/gate2.log
+          if [ "$code" -ne 2 ]; then
+            echo "❌ 云元数据地址未被拒绝（退出码 $code）"
+            exit 1
+          fi
+          echo "✅ 云元数据地址被正确拒绝（防止被当作 SSRF 跳板）"
+
+  # ========== 端到端演练：用夹具跑完整流水线并校验报告 ==========
+  pipeline:
+    name: 流水线演练（离线夹具）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 用夹具跑完整流程（不联网）
+        run: |
+          node src/index.mjs \
+            --scope fixtures/demo-scope.json \
+            --fixture fixtures/demo-observations.json \
+            --out out-demo
+
+      - name: 校验报告内容
+        run: |
+          test -f out-demo/report.md || { echo "❌ 未生成 Markdown 报告"; exit 1; }
+          test -f out-demo/findings.json || { echo "❌ 未生成 JSON 数据"; exit 1; }
+
+          for marker in "攻击面监控报告" "本次新增" "授权范围" "修复建议"; do
+            if ! grep -q "$marker" out-demo/report.md; then
+              echo "❌ 报告缺少必需区块：$marker"
+              exit 1
+            fi
+          done
+          echo "✅ 报告结构完整"
+
+          node -e "
+          const data = require('./out-demo/findings.json');
+          const s = data.summary;
+          console.log('发现总数:', s.total, '| 最高严重度:', s.highest);
+          if (s.total < 10) { console.error('❌ 演示夹具应产出至少 10 条发现，实际 ' + s.total); process.exit(1); }
+          if (s.highest !== 'critical') { console.error('❌ 演示夹具应包含 critical 级发现'); process.exit(1); }
+          for (const sev of ['critical','high','medium','low','info']) {
+            if (!s.counts[sev]) { console.error('❌ 缺少 ' + sev + ' 级发现，分级覆盖不完整'); process.exit(1); }
+          }
+          console.log('✅ 五级严重度覆盖完整');
+          "
+
+      - name: 门禁语义验证（离线演练中不应触发高危门禁外的异常）
+        run: |
+          set +e
+          node src/index.mjs --scope fixtures/demo-scope.json --fixture fixtures/demo-observations.json --out /tmp/x --fail-on critical > /dev/null 2>&1
+          code=$?
+          set -e
+          if [ "$code" -ne 1 ]; then
+            echo "❌ 存在 critical 级新增时，--fail-on critical 应返回退出码 1，实际 $code"
+            exit 1
+          fi
+          echo "✅ 门禁阈值语义正确（critical 触发退出码 1）"
+
+      - name: 上传演示报告
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-report
+          path: out-demo/
+          retention-days: 30

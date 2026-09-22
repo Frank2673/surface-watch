@@ -1,0 +1,110 @@
+name: 攻击面监控
+
+# 定时自动扫描 + 支持手动触发
+on:
+  schedule:
+    # 每周一 02:00 UTC（北京时间 10:00）
+    - cron: '0 2 * * 1'
+  workflow_dispatch:
+
+# 只读代码 + 写 Issue（最小权限原则）
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: surface-watch-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    name: 扫描并比对基线
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 恢复上一次的基线
+        uses: actions/cache@v4
+        with:
+          path: state
+          # 每次用新 key，靠 restore-keys 前缀匹配恢复上一次的结果
+          key: surface-watch-baseline-${{ github.run_id }}
+          restore-keys: |
+            surface-watch-baseline-
+
+      - name: 执行扫描（零依赖，无需 npm install）
+        run: |
+          set +e
+          node src/index.mjs --scope scope.json --out out --update-baseline
+          code=$?
+          set -e
+          # 退出码 1 表示有新发现达到门禁阈值：这是"有结果"，不是"运行失败"，
+          # 因此不中断流程，交由后面的 Issue 步骤负责通知。
+          if [ "$code" -eq 1 ]; then
+            echo "::notice::发现达到门禁阈值的新增问题"
+          elif [ "$code" -ne 0 ]; then
+            echo "::error::扫描运行失败（退出码 $code）"
+            exit "$code"
+          fi
+
+      - name: 写入 Actions 摘要（可直接在页面阅读）
+        if: always()
+        run: |
+          if [ -f out/report.md ]; then
+            cat out/report.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "未生成报告" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: 上传报告产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surface-watch-report-${{ github.run_number }}
+          path: out/
+          retention-days: 90
+
+      - name: 有新发现时创建或更新 Issue
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ ! -f out/findings.json ]; then
+            echo "无扫描数据，跳过通知"
+            exit 0
+          fi
+
+          NEW=$(node -e "const d=require('./out/findings.json'); process.stdout.write(String(d.diff.added.length))")
+          echo "新增发现数：$NEW"
+
+          if [ "$NEW" -eq 0 ]; then
+            echo "✅ 无新增，保持安静（这正是本工具的设计目标：不制造噪音）"
+            exit 0
+          fi
+
+          # 确保标签存在（已存在时忽略报错）
+          gh label create surface-watch \
+            --description "由 surface-watch 自动创建的攻击面变化通知" \
+            --color 0e8a16 2>/dev/null || true
+
+          # 正文截断，避免超过 Issue 长度上限
+          head -c 60000 out/report.md > /tmp/issue-body.md
+
+          EXISTING=$(gh issue list --label surface-watch --state open \
+            --json number --jq '.[0].number // empty')
+
+          if [ -n "$EXISTING" ]; then
+            echo "向已有 Issue #$EXISTING 追加本次变化"
+            gh issue comment "$EXISTING" --body-file /tmp/issue-body.md
+          else
+            gh issue create \
+              --title "🛡️ 攻击面变化：新增 $NEW 项（$(date -u +%Y-%m-%d)）" \
+              --body-file /tmp/issue-body.md \
+              --label surface-watch
+          fi
+
+          echo "::warning::发现 $NEW 项新增问题，已创建/更新跟踪 Issue"

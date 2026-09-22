@@ -1,0 +1,114 @@
+{
+  "_comment": "离线演示夹具：模拟 demo.example.com（虚构域名）的观测结果。数据刻意包含各类典型问题，用于展示完整报告。所有 IP 均取自 RFC 5737 文档用地址段。",
+  "assets": {
+    "demo.example.com": {
+      "dns": {
+        "domain": "demo.example.com",
+        "a": ["203.0.113.10"],
+        "aaaa": [],
+        "cname": [],
+        "ns": ["ns1.example.net", "ns2.example.net"],
+        "mx": [{ "priority": 10, "exchange": "mail.demo.example.com" }],
+        "txt": ["v=spf1 +all"],
+        "dmarcTxt": [],
+        "caa": []
+      },
+      "tls": {
+        "reachable": true,
+        "protocol": "TLSv1.1",
+        "cipher": "ECDHE-RSA-AES256-SHA",
+        "authorized": false,
+        "authorizationError": "CERT_HAS_EXPIRED",
+        "subject": "demo.example.com",
+        "issuer": "Let's Encrypt",
+        "validFrom": "Jul  1 00:00:00 2026 GMT",
+        "validTo": "Sep 20 00:00:00 2026 GMT",
+        "daysRemaining": -2,
+        "altNames": "DNS:demo.example.com, DNS:*.demo.example.com"
+      },
+      "headers": {
+        "url": "https://demo.example.com/",
+        "ok": true,
+        "error": null,
+        "status": 200,
+        "finalUrl": "https://demo.example.com/",
+        "ms": 128,
+        "truncated": false,
+        "headers": {
+          "server": "nginx/1.18.0",
+          "date": "Tue, 22 Sep 2026 16:40:00 GMT",
+          "content-type": "text/html; charset=utf-8",
+          "content-length": "1024",
+          "connection": "keep-alive"
+        }
+      },
+      "paths": {
+        "baseline": {
+          "status": 404,
+          "length": 153,
+          "contentType": "text/html"
+        },
+        "results": {
+          "/.git/config": {
+            "ok": true,
+            "error": null,
+            "status": 200,
+            "length": 132,
+            "headers": { "content-type": "text/plain" },
+            "body": "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n[remote \"origin\"]\n\turl = git@github.com:acme/internal-app.git\n"
+          },
+          "/.env": {
+            "ok": true,
+            "error": null,
+            "status": 200,
+            "length": 96,
+            "headers": { "content-type": "text/plain" },
+            "body": "APP_ENV=production\nDB_PASSWORD=REDACTED_FOR_DEMO\nAPI_KEY=REDACTED_FOR_DEMO\n"
+          },
+          "/.DS_Store": {
+            "ok": true,
+            "error": null,
+            "status": 404,
+            "length": 153,
+            "headers": { "content-type": "text/html" },
+            "body": "Not Found"
+          },
+          "/backup.zip": {
+            "ok": true,
+            "error": null,
+            "status": 404,
+            "length": 153,
+            "headers": { "content-type": "text/html" },
+            "body": "Not Found"
+          },
+          "/server-status": {
+            "ok": true,
+            "error": null,
+            "status": 403,
+            "length": 289,
+            "headers": { "content-type": "text/html" },
+            "body": "Forbidden"
+          },
+          "/phpinfo.php": {
+            "ok": true,
+            "error": null,
+            "status": 404,
+            "length": 153,
+            "headers": { "content-type": "text/html" },
+            "body": "Not Found"
+          }
+        }
+      },
+      "ct": {
+        "available": true,
+        "entries": 42,
+        "subdomains": [
+          "demo.example.com",
+          "staging.demo.example.com",
+          "old.demo.example.com",
+          "vpn.demo.example.com"
+        ]
+      }
+    }
+  }
+}

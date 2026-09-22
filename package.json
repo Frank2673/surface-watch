@@ -1,0 +1,29 @@
+{
+  "name": "surface-watch",
+  "version": "0.1.0",
+  "description": "零依赖攻击面监控与基线差异 —— 只看变化，不刷全量清单",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "surface-watch": "src/index.mjs"
+  },
+  "scripts": {
+    "scan": "node src/index.mjs --scope scope.json --out out --update-baseline",
+    "scan:dry": "node src/index.mjs --scope scope.json --out out --fixture fixtures/demo-observations.json",
+    "test": "node --test tests/",
+    "help": "node src/index.mjs --help"
+  },
+  "keywords": [
+    "attack-surface",
+    "recon",
+    "security",
+    "monitoring",
+    "zero-dependency"
+  ],
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {}
+}

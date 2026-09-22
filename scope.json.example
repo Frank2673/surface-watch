@@ -1,0 +1,42 @@
+{
+  "_说明": "这是范围文件模板。复制为 scope.json 后按你的实际情况修改。",
+  "_警告": "只有你拥有或已获书面授权的资产才能写进 assets。工具会拒绝内网、回环与云元数据地址。",
+
+  "owner": "你的名字或组织",
+  "authorization": {
+    "statement": "以下资产由我本人拥有或控制，我授权本工具对其进行常规安全检查。",
+    "contact": "https://github.com/your-name"
+  },
+
+  "rate_limit": {
+    "concurrency": 4,
+    "delay_ms": 400,
+    "timeout_ms": 10000
+  },
+
+  "assets": [
+    {
+      "domain": "example.com",
+      "tags": ["primary"],
+      "note": "主站"
+    },
+    {
+      "domain": "api.example.com",
+      "tags": ["api"],
+      "note": "接口服务"
+    }
+  ],
+
+  "checks": {
+    "dns": true,
+    "tls": true,
+    "headers": true,
+
+    "ct_logs": false,
+
+    "paths": {
+      "enabled": false,
+      "list": ["/.git/config", "/.env", "/.DS_Store", "/backup.zip", "/server-status", "/phpinfo.php"]
+    }
+  }
+}
