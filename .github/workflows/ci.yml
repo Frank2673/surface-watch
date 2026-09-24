@@ -100,12 +100,58 @@ jobs:
         with:
           node-version: '20'
 
-      - name: 用夹具跑完整流程（不联网）
+      - name: 用夹具跑完整流程（不联网，同时产出 SARIF）
         run: |
           node src/index.mjs \
             --scope fixtures/demo-scope.json \
             --fixture fixtures/demo-observations.json \
-            --out out-demo
+            --out out-demo \
+            --sarif out-demo/results.sarif
+
+      - name: SARIF 输出校验（Code Scanning 消费的格式必须合规）
+        run: |
+          test -f out-demo/results.sarif || { echo "❌ 未生成 SARIF 文件"; exit 1; }
+
+          node --input-type=module -e "
+          import { validateSarif } from './src/lib/sarif.mjs';
+          import { readFileSync } from 'node:fs';
+
+          const sarif = JSON.parse(readFileSync('out-demo/results.sarif', 'utf8'));
+          const r = validateSarif(sarif);
+          if (!r.ok) {
+            console.error('❌ SARIF 结构不合规：');
+            for (const p of r.problems) console.error('   - ' + p);
+            process.exit(1);
+          }
+
+          const run = sarif.runs[0];
+          console.log('✅ SARIF 结构合规');
+          console.log('   工具：' + run.tool.driver.name + ' v' + run.tool.driver.version);
+          console.log('   规则 ' + run.tool.driver.rules.length + ' 条 · 告警 ' + run.results.length + ' 条');
+
+          const levels = {};
+          for (const x of run.results) levels[x.level] = (levels[x.level] || 0) + 1;
+          console.log('   level 分布：' + JSON.stringify(levels));
+
+          // 演示夹具含 critical/high 级发现，SARIF 中必须出现 error 级告警
+          if (!run.results.some((x) => x.level === 'error')) {
+            console.error('❌ 夹具含高危发现，SARIF 中却没有 error 级告警');
+            process.exit(1);
+          }
+
+          // Code Scanning 要求每条告警都有可定位的位置
+          if (!run.results.every((x) => x.locations?.[0]?.physicalLocation?.artifactLocation?.uri)) {
+            console.error('❌ 存在缺少位置的告警');
+            process.exit(1);
+          }
+
+          // 每条告警的 ruleId 必须已在 rules 中声明（已由 validateSarif 检查，这里再确认非空）
+          if (run.tool.driver.rules.length === 0) {
+            console.error('❌ rules 为空');
+            process.exit(1);
+          }
+          console.log('✅ SARIF 关键要求全部满足');
+          "
 
       - name: 校验报告内容
         run: |

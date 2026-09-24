@@ -99,13 +99,41 @@ collect（采集，碰网络）  →  evaluate（评估，纯函数）  →  rep
 | `--fixture <路径>` | 用夹具代替网络（不发起任何请求） |
 | `--only <检查项>` | 只跑指定检查，逗号分隔 |
 | `--fail-on <严重度>` | 出现该级别及以上的**新增**发现时退出码为 1（用于 CI 门禁） |
+| `--sarif [路径]` | 额外输出 SARIF 报告（默认 `out/results.sarif`），可上传至 GitHub Code Scanning |
 
 **退出码**：`0` 正常 · `1` 触发门禁阈值 · `2` 运行错误（范围非法等）
+
+## 接入 GitHub Code Scanning
+
+用 `--sarif` 产出标准 SARIF 报告，即可让发现直接出现在仓库的 **Security 面板**：可指派、可标记误报、可跟踪修复状态，团队不必打开报告才知道出了问题。
+
+```bash
+node src/index.mjs --scope scope.json --out out --sarif
+```
+
+```yaml
+# 工作流中上传（需 permissions: security-events: write）
+- uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: out/results.sarif
+    category: surface-watch
+```
+
+**两个设计细节**：
+
+1. **告警指纹与内部差异比对共用同一套**（`partialFingerprints`）——
+   因此同一条发现跨多次运行会被 GitHub 识别为同一个告警，不会反复新增。
+2. **位置落在 `scope.json`**（而非资产 URL）—— Code Scanning 的告警需要落在仓库内真实存在的文件上；
+   资产正是在那里声明的，也是你会去改动它的地方。资产 URL 完整保留在告警消息与属性中，信息不丢失。
+
+严重度映射：`critical/high` → `error`，`medium` → `warning`，`low/info` → `note`；
+同时写入 `security-severity` 分值（9.5 / 8.0 / 5.5 / 3.0 / 1.0），供 GitHub 侧分级排序。
 
 ## 定时监控（GitHub Actions）
 
 仓库自带 `.github/workflows/scan.yml`：每周一自动扫描 `scope.json` 中的资产，
-把报告写入 Actions 摘要并上传为 artifact，**有新发现时自动创建或更新 Issue**。
+把报告写入 Actions 摘要、上传为 artifact、**并把 SARIF 上传到 Code Scanning**，
+**有新发现时自动创建或更新 Issue**。
 
 也可以在 Actions 页面手动触发（`workflow_dispatch`）。基线通过 Actions cache 跨运行保存。
 
@@ -144,7 +172,7 @@ fixtures/                 虚构演示数据（RFC 2606 保留域名）
 
 ## 路线图
 
-- [ ] 输出 SARIF 格式，接入 GitHub Code Scanning 告警面板
+- [x] 输出 SARIF 格式，接入 GitHub Code Scanning 告警面板 ✅
 - [ ] 支持邮件/Webhook 通知（Slack、飞书、企业微信）
 - [ ] 增加 `robots.txt` / `security.txt` 检查
 - [ ] 支持多目标并发采集（当前为顺序执行，换取更好的可控性）

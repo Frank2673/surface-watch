@@ -22,6 +22,7 @@ import { loadScope, assertHostInScope, ScopeError } from './lib/scope.mjs';
 import { runScan } from './lib/scan.mjs';
 import { diffFindings, hasAddedAtOrAbove, isBaselineEstablishment } from './lib/diff.mjs';
 import { renderMarkdown, renderJson, renderSummary } from './lib/report.mjs';
+import { toSarif, validateSarif } from './lib/sarif.mjs';
 import { SEVERITY, compareSeverity } from './lib/findings.mjs';
 
 const VERSION = '0.1.0';
@@ -41,6 +42,8 @@ surface-watch v${VERSION} —— 攻击面监控与基线差异（零依赖）
   --only <检查项>       只运行指定检查，逗号分隔：dns,tls,headers,paths,ct
   --asset <域名>        只扫描指定资产（逗号分隔可多个）；不在范围内的域名会被拒绝
   --fail-on <严重度>    有该级别及以上的「新增」发现时退出码为 1（info|low|medium|high|critical）
+  --sarif [路径]        额外输出 SARIF 报告（默认 out/results.sarif），
+                        可上传至 GitHub Code Scanning，让告警出现在仓库 Security 面板
   --no-color            关闭彩色输出
   --quiet               精简输出
   --help                显示本帮助
@@ -61,6 +64,8 @@ function parseArgs(argv) {
     '--fail-on',
     '--asset',
   ]);
+  /* 值可省略的选项：单独出现时按 true 处理（使用默认路径） */
+  const optionalValue = new Set(['--sarif']);
 
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i];
@@ -71,6 +76,14 @@ function parseArgs(argv) {
       }
       args[token.slice(2)] = value;
       i++;
+    } else if (optionalValue.has(token)) {
+      const value = argv[i + 1];
+      if (value && !value.startsWith('--')) {
+        args[token.slice(2)] = value;
+        i++;
+      } else {
+        args[token.slice(2)] = true;
+      }
     } else if (token.startsWith('--')) {
       args[token.slice(2)] = true;
     } else {
@@ -190,12 +203,35 @@ async function main() {
   writeFileSync(reportPath, markdown, 'utf8');
   writeFileSync(jsonPath, JSON.stringify(json, null, 2), 'utf8');
 
+  /* ---- SARIF 输出（供 GitHub Code Scanning 消费）---- */
+  let sarifPath = null;
+  if (args.sarif) {
+    sarifPath = typeof args.sarif === 'string' ? args.sarif : join(outDir, 'results.sarif');
+    const sarif = toSarif({
+      findings,
+      scannedAssets: scope.assets.map((a) => a.domain),
+      meta,
+    });
+
+    /* 自校验：SARIF 结构错误会让 GitHub 直接拒绝上传，与其在 CI 里报错，不如在这里拦住 */
+    const check = validateSarif(sarif);
+    if (!check.ok) {
+      console.error('\n🛑 生成的 SARIF 未通过结构校验：');
+      for (const p of check.problems) console.error(`   - ${p}`);
+      return 2;
+    }
+
+    mkdirSync(dirname(sarifPath), { recursive: true });
+    writeFileSync(sarifPath, JSON.stringify(sarif, null, 2), 'utf8');
+  }
+
   /* ---- 5. 打印摘要 ---- */
   console.log('');
   console.log(renderSummary({ findings, diff, meta }));
   console.log('');
   log(`📄 报告：${reportPath}`);
   log(`🧾 数据：${jsonPath}`);
+  if (sarifPath) log(`🔒 SARIF：${sarifPath}（可上传至 GitHub Code Scanning）`);
 
   /* ---- 6. 更新基线 ---- */
   if (args['update-baseline']) {
