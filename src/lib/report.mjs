@@ -10,15 +10,25 @@
  */
 
 import { SEVERITY, severityIcon, severityLabel, summarize } from './findings.mjs';
+import { changesetFromDiff, summarizeChangeset } from './changeset.mjs';
 
 const TOOL = 'surface-watch';
+
+/**
+ * 统一入参形状：优先用单一变化源（lib/changeset.mjs），
+ * 仍传裸 diff 的调用方会被规范化成变化集（规范化只在 changeset 里做一次）。
+ */
+function asChangeset({ changeset, diff, baseline = [] }) {
+  return changeset || changesetFromDiff(diff || {}, baseline);
+}
 
 /**
  * Markdown 报告
  * @param {object} input
  * @returns {string}
  */
-export function renderMarkdown({ scope, findings, diff, meta }) {
+export function renderMarkdown({ scope, findings, changeset, diff, meta }) {
+  const cs = asChangeset({ changeset, diff });
   const stats = summarize(findings);
   const lines = [];
 
@@ -35,9 +45,11 @@ export function renderMarkdown({ scope, findings, diff, meta }) {
   lines.push(`| 监控资产 | ${meta.assetsScanned} 个 |`);
   lines.push(`| 发现总数 | ${stats.total} |`);
   lines.push(`| 最高严重度 | ${stats.highest ? `${severityIcon(stats.highest)} ${severityLabel(stats.highest)}` : '无'} |`);
-  lines.push(`| 本次新增 | ${diff.added.length} |`);
-  lines.push(`| 本次已修复 | ${diff.resolved.length} |`);
-  lines.push(`| 持续存在 | ${diff.persistent.length} |`);
+  lines.push(`| 本次新增 | ${cs.added.length} |`);
+  lines.push(`| 本次已修复 | ${cs.resolved.length} |`);
+  lines.push(`| 持续存在 | ${cs.persistent.length} |`);
+  /* 透明度：部分扫描时"莫名少了"的基线条目（判据与计数来自单一变化源） */
+  lines.push(`| 因未扫描而被忽略的基线项 | ${cs.ignored.count} |`);
   lines.push('');
 
   /* ---- 严重度分布 ---- */
@@ -53,18 +65,18 @@ export function renderMarkdown({ scope, findings, diff, meta }) {
   /* ---- 本次新增（最重要的部分放最前）---- */
   lines.push('## 🔔 本次新增');
   lines.push('');
-  if (diff.added.length === 0) {
+  if (cs.added.length === 0) {
     lines.push(meta.baselineEstablished ? '_首次运行，已建立基线；下次运行将显示变化。_' : '_无新增发现。_');
   } else {
-    for (const f of diff.added) lines.push(...findingBlock(f, { showAsset: true }));
+    for (const f of cs.added) lines.push(...findingBlock(f, { showAsset: true }));
   }
   lines.push('');
 
   /* ---- 已修复 ---- */
-  if (diff.resolved.length > 0) {
+  if (cs.resolved.length > 0) {
     lines.push('## ✅ 本次已修复');
     lines.push('');
-    for (const f of diff.resolved) {
+    for (const f of cs.resolved) {
       lines.push(`- ${severityIcon(f.severity)} **${f.title}**（\`${f.asset}\` · ${f.check}）`);
     }
     lines.push('');
@@ -73,10 +85,10 @@ export function renderMarkdown({ scope, findings, diff, meta }) {
   /* ---- 持续存在 ---- */
   lines.push('## 📌 持续存在');
   lines.push('');
-  if (diff.persistent.length === 0) {
+  if (cs.persistent.length === 0) {
     lines.push('_无。_');
   } else {
-    const byAsset = groupBy(diff.persistent, (f) => f.asset);
+    const byAsset = groupBy(cs.persistent, (f) => f.asset);
     for (const [asset, items] of Object.entries(byAsset)) {
       lines.push(`<details><summary><code>${asset}</code> — ${items.length} 项</summary>`);
       lines.push('');
@@ -144,13 +156,22 @@ function groupBy(list, keyFn) {
 
 /**
  * JSON 报告
+ *
+ * 产物契约（只**新增**字段，不改既有字段名与语义）：
+ *   - `baselineEstablished`：本次是否为首次建立基线（既有 helper `isBaselineEstablishment` 的口径）
+ *   - `diff.ignoredCount`  ：因本次未扫描该资产而被过滤掉的基线条目数（既有 diff 已算出、原先没落盘）
+ *   - `changeset`          ：单一变化源的**标量摘要**，供 CI 直接读（`addedCount` 即"有没有新变化"的判据）
  */
-export function renderJson({ scope, findings, diff, meta }) {
+export function renderJson({ scope, findings, changeset, diff, meta }) {
+  const cs = asChangeset({ changeset, diff });
+  const summary = summarizeChangeset(cs);
+
   return {
     tool: TOOL,
     version: meta.version,
     startedAt: meta.startedAt,
     durationMs: meta.durationMs,
+    baselineEstablished: cs.baselineEstablished,
     scope: {
       owner: scope.owner,
       assets: scope.assets.map((a) => a.domain),
@@ -158,10 +179,12 @@ export function renderJson({ scope, findings, diff, meta }) {
     },
     summary: summarize(findings),
     diff: {
-      added: diff.added.map(toPlain),
-      resolved: diff.resolved.map(toPlain),
-      persistent: diff.persistent.map(toPlain),
+      added: cs.added.map(toPlain),
+      resolved: cs.resolved.map(toPlain),
+      persistent: cs.persistent.map(toPlain),
+      ignoredCount: summary.ignoredCount,
     },
+    changeset: summary,
     findings: findings.map(toPlain),
     skipped: meta.skipped || [],
   };
@@ -174,24 +197,27 @@ function toPlain(f) {
 
 /**
  * 控制台摘要（供 CI 日志阅读）
+ *
+ * 输出格式与改造前逐字一致：只把取值来源换成单一变化源。
  */
-export function renderSummary({ findings, diff, meta }) {
+export function renderSummary({ findings, changeset, diff, meta }) {
+  const cs = asChangeset({ changeset, diff });
   const stats = summarize(findings);
   const lines = [];
-  const status = diff.added.some((f) => f.severity === 'high' || f.severity === 'critical')
+  const status = cs.added.some((f) => f.severity === 'high' || f.severity === 'critical')
     ? '🔴 有高危新增'
-    : diff.added.length > 0
+    : cs.added.length > 0
       ? '⚠️ 有新增发现'
       : '✅ 无新增';
 
-  lines.push(`${status} | 资产 ${meta.assetsScanned} | 发现 ${stats.total} | 新增 ${diff.added.length} | 已修复 ${diff.resolved.length} | 持续 ${diff.persistent.length}`);
+  lines.push(`${status} | 资产 ${meta.assetsScanned} | 发现 ${stats.total} | 新增 ${cs.added.length} | 已修复 ${cs.resolved.length} | 持续 ${cs.persistent.length}`);
 
-  for (const f of diff.added.slice(0, 10)) {
+  for (const f of cs.added.slice(0, 10)) {
     lines.push(`  + [${severityLabel(f.severity)}] ${f.asset} · ${f.title}`);
   }
-  if (diff.added.length > 10) lines.push(`  … 其余 ${diff.added.length - 10} 条见报告`);
+  if (cs.added.length > 10) lines.push(`  … 其余 ${cs.added.length - 10} 条见报告`);
 
-  for (const f of diff.resolved.slice(0, 5)) {
+  for (const f of cs.resolved.slice(0, 5)) {
     lines.push(`  - [已修复] ${f.asset} · ${f.title}`);
   }
 
@@ -201,6 +227,6 @@ export function renderSummary({ findings, diff, meta }) {
 /**
  * GitHub Actions Job Summary（在 Actions 页面直接渲染，无需下载 artifact）
  */
-export function renderJobSummary({ scope, findings, diff, meta }) {
-  return renderMarkdown({ scope, findings, diff, meta });
+export function renderJobSummary({ scope, findings, changeset, diff, meta }) {
+  return renderMarkdown({ scope, findings, changeset, diff, meta });
 }

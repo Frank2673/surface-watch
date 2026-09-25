@@ -92,7 +92,10 @@ jobs:
             exit 0
           fi
 
-          NEW=$(node -e "const d=require('./out/findings.json'); process.stdout.write(String(d.diff.added.length))")
+          # 判据不在这里算：直接读产物里由单一变化源（src/lib/changeset.mjs）算好的 addedCount。
+          # 这样"什么算变化"只有一处实现，将来扩展判据不会漏改 CI（原先内联的
+          # node -e "...d.diff.added.length" 就是第三份重复实现）。
+          NEW=$(node -e "const d=require('./out/findings.json'); const cs=d.changeset; if(!cs||typeof cs.addedCount!=='number'){console.error('findings.json 缺少 changeset.addedCount（产物契约不匹配），拒绝在判据未知时开 Issue');process.exit(1)} process.stdout.write(String(cs.addedCount))")
           echo "新增发现数：$NEW"
 
           if [ "$NEW" -eq 0 ]; then

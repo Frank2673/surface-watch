@@ -15,6 +15,8 @@
  * @module lib/sarif
  */
 
+import { summarizeChangeset } from './changeset.mjs';
+
 const SARIF_VERSION = '2.1.0';
 const SARIF_SCHEMA = 'https://json.schemastore.org/sarif-2.1.0.json';
 
@@ -52,12 +54,23 @@ const SECURITY_SEVERITY_MAP = {
  * @param {Array} input.findings 发现列表
  * @param {Array} input.scannedAssets 本次扫描的资产（用于声明扫描范围）
  * @param {object} input.meta 运行元信息
+ * @param {object} [input.changeset] 单一变化源（`lib/changeset.mjs`）——
+ *   只用于把变化计数写进 `runs[0].properties`（与 findings.json 的 `changeset` 同名字段同义）；
+ *   省略时不写这些字段，其余输出完全不变。**不影响任何 `partialFingerprints`**。
  * @param {string} [input.toolUri] 工具主页
  * @param {string} [input.sourceFile] 告警落脚的文件（默认 scope.json）
  * @returns {object} SARIF 文档
  */
-export function toSarif({ findings, scannedAssets = [], meta = {}, toolUri, sourceFile = 'scope.json' }) {
+export function toSarif({
+  findings,
+  scannedAssets = [],
+  meta = {},
+  changeset = null,
+  toolUri,
+  sourceFile = 'scope.json',
+}) {
   const rules = buildRules(findings);
+  const changeSummary = changeset ? summarizeChangeset(changeset) : null;
 
   const results = findings.map((finding) => {
     const ruleId = ruleIdOf(finding);
@@ -116,6 +129,18 @@ export function toSarif({ findings, scannedAssets = [], meta = {}, toolUri, sour
           startedAt: meta.startedAt,
           durationMs: meta.durationMs,
           scopeDiscipline: '仅扫描 scope.json 中声明的资产（授权范围强制）',
+          /* 变化契约（与 findings.json 的 changeset 同名字段同义）；
+             纯新增字段，既有的 scannedAssets/startedAt/durationMs 不变 */
+          ...(changeSummary
+            ? {
+                baselineEstablished: changeSummary.baselineEstablished,
+                addedCount: changeSummary.addedCount,
+                resolvedCount: changeSummary.resolvedCount,
+                persistentCount: changeSummary.persistentCount,
+                changedCount: changeSummary.changedCount,
+                ignoredCount: changeSummary.ignoredCount,
+              }
+            : {}),
         },
         results,
       },
