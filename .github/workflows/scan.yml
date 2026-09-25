@@ -67,7 +67,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: surface-watch-report-${{ github.run_number }}
-          path: out/
+          # 排除 Webhook 投递记录：它含投递 URL（当前已脱敏为 /前2位*** + urlHash），
+          # 但 artifact 是长期可下载的对外产物 —— 凭据类字段一律不进 artifact，
+          # 不依赖「脱敏逻辑以后不会退化」这个假设。投递结果仍可在运行日志与摘要中查看。
+          path: |
+            out/
+            !out/webhook-delivery.json
           retention-days: 90
 
       - name: 上传 SARIF 至 GitHub Code Scanning
