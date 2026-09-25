@@ -1,7 +1,7 @@
 {
   "name": "surface-watch",
   "version": "0.1.0",
-  "description": "零依赖攻击面监控与基线差异 —— 只看变化，不刷全量清单",
+  "description": "Zero-dependency attack-surface monitor for authorized recon — DNS, TLS, security headers and sensitive-path checks, with baseline diffing that reports only what changed.",
   "type": "module",
   "private": true,
   "engines": {
@@ -10,6 +10,15 @@
   "bin": {
     "surface-watch": "src/index.mjs"
   },
+  "files": [
+    "src/",
+    "fixtures/",
+    "scripts/fake-webhook.mjs",
+    "scope.json.example",
+    "SECURITY.md",
+    "README.md",
+    "README.en.md"
+  ],
   "scripts": {
     "scan": "node src/index.mjs --scope scope.json --out out --update-baseline",
     "scan:dry": "node src/index.mjs --scope scope.json --out out --fixture fixtures/demo-observations.json",
@@ -19,12 +28,34 @@
   },
   "keywords": [
     "attack-surface",
+    "attack-surface-management",
     "recon",
+    "reconnaissance",
     "security",
+    "security-tools",
     "monitoring",
-    "zero-dependency"
+    "change-detection",
+    "baseline-diff",
+    "dns",
+    "tls",
+    "certificate-expiry",
+    "security-headers",
+    "sarif",
+    "devsecops",
+    "zero-dependency",
+    "cli",
+    "nodejs"
   ],
   "license": "MIT",
+  "author": "Frank2673 <253210312+Frank2673@users.noreply.github.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Frank2673/surface-watch.git"
+  },
+  "homepage": "https://github.com/Frank2673/surface-watch#readme",
+  "bugs": {
+    "url": "https://github.com/Frank2673/surface-watch/issues"
+  },
   "dependencies": {},
   "devDependencies": {}
 }

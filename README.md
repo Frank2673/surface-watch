@@ -1,5 +1,7 @@
 # surface-watch
 
+[English](README.en.md) | 简体中文
+
 [![CI](https://github.com/Frank2673/surface-watch/actions/workflows/ci.yml/badge.svg)](https://github.com/Frank2673/surface-watch/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
