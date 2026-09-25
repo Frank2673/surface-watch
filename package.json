@@ -14,6 +14,7 @@
     "scan": "node src/index.mjs --scope scope.json --out out --update-baseline",
     "scan:dry": "node src/index.mjs --scope scope.json --out out --fixture fixtures/demo-observations.json",
     "test": "node --test tests/",
+    "fake-webhook": "node scripts/fake-webhook.mjs",
     "help": "node src/index.mjs --help"
   },
   "keywords": [

@@ -20,10 +20,25 @@ import { join, dirname } from 'node:path';
 import { request } from './lib/http.mjs';
 import { loadScope, assertHostInScope, ScopeError } from './lib/scope.mjs';
 import { runScan } from './lib/scan.mjs';
-import { diffFindings, hasAddedAtOrAbove, isBaselineEstablishment } from './lib/diff.mjs';
+import { buildChangeset, hasAddedAtOrAbove, triggerFindings } from './lib/changeset.mjs';
 import { renderMarkdown, renderJson, renderSummary } from './lib/report.mjs';
 import { toSarif, validateSarif } from './lib/sarif.mjs';
 import { SEVERITY, compareSeverity } from './lib/findings.mjs';
+import {
+  resolveWebhookConfig,
+  planDelivery,
+  buildPayload,
+  deliverWebhook,
+  buildDeliveryRecord,
+  buildNoDeliveryRecord,
+  writeDeliveryRecord,
+  redactUrl,
+  DEFAULT_MIN_SEVERITY,
+  DEFAULT_WEBHOOK_TIMEOUT_MS,
+  defaultWebhookDeadlineMs,
+  ENV_WEBHOOK_URL,
+  ENV_WEBHOOK_SECRET,
+} from './lib/notify.mjs';
 
 const VERSION = '0.1.0';
 
@@ -44,6 +59,25 @@ surface-watch v${VERSION} —— 攻击面监控与基线差异（零依赖）
   --fail-on <严重度>    有该级别及以上的「新增」发现时退出码为 1（info|low|medium|high|critical）
   --sarif [路径]        额外输出 SARIF 报告（默认 out/results.sarif），
                         可上传至 GitHub Code Scanning，让告警出现在仓库 Security 面板
+  --webhook <url>       Webhook 告警地址；仅当本次出现「新增指纹」时投递（详见下方说明），
+                        可用环境变量 ${ENV_WEBHOOK_URL} 回退（CI 里用 secret 注入）
+  --webhook-secret <s>  可选：对请求体做 HMAC-SHA256，请求头
+                        ${'X-Surface-Watch-Signature'}: sha256=<hex>
+                        可用环境变量 ${ENV_WEBHOOK_SECRET} 回退
+  --webhook-min-severity <级别>
+                        告警阈值（默认 ${DEFAULT_MIN_SEVERITY}）：仅投递该级别及以上的「新增指纹」
+                        （info|low|medium|high|critical）
+  --webhook-timeout <ms> 单次投递的 socket 空闲超时（默认 ${DEFAULT_WEBHOOK_TIMEOUT_MS}ms）：
+                        只覆盖"一次尝试里 socket 无数据"，不是投递总时长
+  --webhook-deadline <ms>
+                        投递整体截止时间（默认 max(10000, 3 × --webhook-timeout)，
+                        即 --webhook-timeout ${DEFAULT_WEBHOOK_TIMEOUT_MS} 时为 ${defaultWebhookDeadlineMs(DEFAULT_WEBHOOK_TIMEOUT_MS)}ms）：
+                        覆盖 connect + 响应头 + 响应体 + 退避 + 全部重试的总时长。
+                        慢接收端（200 + chunked 后每 200ms 一字节、永不结束）下
+                        socket 一直有数据，只有它能保证投递阶段有界结束
+  --webhook-include-initial
+                        基线缺失（首次运行）时也投递首轮全量；默认跳过（基线缺失时
+                        "全部都是新增"是假象，不是真的变化）
   --no-color            关闭彩色输出
   --quiet               精简输出
   --help                显示本帮助
@@ -51,6 +85,16 @@ surface-watch v${VERSION} —— 攻击面监控与基线差异（零依赖）
 说明：
   本工具只检查 scope.json 中声明的资产，并拒绝内网/回环/云元数据地址。
   主动路径探测默认关闭，需在 scope.json 中显式开启 checks.paths.enabled。
+
+  Webhook 触发集合严格等于「本次新增的指纹」（diff.added）：
+    - 无新增 → 不投递（no-op，仅日志一行）；
+    - 指纹未变但内容变化（严重度升级/证据变化）只作为载荷里的信息项，不触发投递；
+    - 基线不存在或为空 → 默认跳过（stderr 一行说明），加 --webhook-include-initial 才推送。
+  两个阈值相互独立，别混用：
+    --fail-on             控制**退出码**（严格阈值：无变化=0；新增 high 且 --fail-on high → 1）
+    --webhook-min-severity 控制**推不推、推哪些**（默认 medium）
+  投递失败不会改变扫描退出码与既有产物：错误写 stderr，
+  投递结果写 <--out>/webhook-delivery.json。
 `.trim();
 
 function parseArgs(argv) {
@@ -63,6 +107,11 @@ function parseArgs(argv) {
     '--only',
     '--fail-on',
     '--asset',
+    '--webhook',
+    '--webhook-secret',
+    '--webhook-min-severity',
+    '--webhook-timeout',
+    '--webhook-deadline',
   ]);
   /* 值可省略的选项：单独出现时按 true 处理（使用默认路径） */
   const optionalValue = new Set(['--sarif']);
@@ -128,6 +177,24 @@ async function main() {
   const t0 = Date.now();
   const log = args.quiet ? () => {} : (m) => console.log(m);
 
+  /* ---- 0. Webhook 配置（提前解析：配置类错误要在扫描前暴露，而不是扫完一轮才报）----
+     注意：投递地址由使用者显式配置，因此不受 Scope Gate 约束（它指的是"把告警发去哪"，
+     不是"扫什么"）；扫描目标本身仍然一律经过 Scope Gate。 */
+  const webhook = resolveWebhookConfig({ args, env: process.env });
+  if (!webhook && (args['webhook-secret'] || process.env[ENV_WEBHOOK_SECRET])) {
+    console.error(
+      `⚠️ 配置了 Webhook 密钥但没有投递地址（--webhook / ${ENV_WEBHOOK_URL}），本次不会投递告警。`
+    );
+  }
+  if (webhook) {
+    log(
+      `🔔 Webhook：${redactUrl(webhook.url)}` +
+        `${webhook.secret ? '（已启用 HMAC-SHA256 签名）' : '（未签名）'}` +
+        ` · 阈值 ${webhook.minSeverity}` +
+        ` · 单次空闲超时 ${webhook.timeoutMs}ms · 整体截止 ${webhook.deadlineMs}ms`
+    );
+  }
+
   /* ---- 1. 加载范围（Scope Gate 的第一道关）---- */
   const scope = loadScope(scopePath);
   log(`📋 范围：${scope.assets.length} 个资产（所有者 ${scope.owner}）`);
@@ -171,14 +238,18 @@ async function main() {
     log,
   });
 
-  /* ---- 3. 与基线比对 ---- */
+  /* ---- 3. 与基线比对 ----
+     「什么算变化」的判据只有一处：lib/changeset.mjs（CLI 门禁 / Webhook / CI 都消费它）。
+     本文件不再自己挑 diff 的子集来判定。 */
   const baselineData = readJsonIfExists(baselinePath);
   const baseline = baselineData && Array.isArray(baselineData.findings) ? baselineData.findings : [];
-  const baselineEstablished = isBaselineEstablishment(baseline);
-  const diff = diffFindings(findings, baseline, {
+  const changeset = buildChangeset({
+    findings,
+    baseline,
     /* 只在本次扫描的资产范围内比对，避免部分扫描时产生"已修复"假警报 */
     assets: scope.assets.map((a) => a.domain),
   });
+  const baselineEstablished = changeset.baselineEstablished;
 
   const meta = {
     version: VERSION,
@@ -194,8 +265,8 @@ async function main() {
   /* ---- 4. 写输出 ---- */
   mkdirSync(outDir, { recursive: true });
 
-  const markdown = renderMarkdown({ scope, findings, diff, meta });
-  const json = renderJson({ scope, findings, diff, meta });
+  const markdown = renderMarkdown({ scope, findings, changeset, meta });
+  const json = renderJson({ scope, findings, changeset, meta });
   json.observations = observations;
 
   const reportPath = join(outDir, 'report.md');
@@ -211,6 +282,7 @@ async function main() {
       findings,
       scannedAssets: scope.assets.map((a) => a.domain),
       meta,
+      changeset,
     });
 
     /* 自校验：SARIF 结构错误会让 GitHub 直接拒绝上传，与其在 CI 里报错，不如在这里拦住 */
@@ -227,13 +299,107 @@ async function main() {
 
   /* ---- 5. 打印摘要 ---- */
   console.log('');
-  console.log(renderSummary({ findings, diff, meta }));
+  console.log(renderSummary({ findings, changeset, meta }));
   console.log('');
   log(`📄 报告：${reportPath}`);
   log(`🧾 数据：${jsonPath}`);
   if (sarifPath) log(`🔒 SARIF：${sarifPath}（可上传至 GitHub Code Scanning）`);
 
-  /* ---- 6. 更新基线 ---- */
+  /* ---- 6. Webhook 告警投递（仅"新增指纹"时投递；失败不影响扫描结果与退出码）---- */
+  if (webhook) {
+    const includeInitial = Boolean(args['webhook-include-initial']);
+    const plan = planDelivery({
+      /* 触发集合从单一变化源来：changeset.added（不再由本文件自己挑 diff 的子集） */
+      changeset,
+      minSeverity: webhook.minSeverity,
+      includeInitial,
+    });
+    const recordPath = join(outDir, 'webhook-delivery.json');
+
+    if (!plan.triggered) {
+      /* no-op：一次网络请求都不发。记录文件同步刷新，
+         避免上一次运行留下的失败记录被误读成本次结果。 */
+      if (plan.reason === 'baseline-establishment') {
+        /* 首次运行必须静默：基线缺失时"全部发现都是新增"是假象。
+           这一行写 stderr，因为它是"为什么没收到告警"的答案，CI 日志里不该被 quiet 吞掉。 */
+        console.error(
+          `⏭️ 基线不存在或为空（${existsSync(baselinePath) ? baselinePath : `${baselinePath} 不存在`}），` +
+            `跳过 Webhook 投递（首次运行不告警；确需推送首轮全量请加 --webhook-include-initial）`
+        );
+      } else {
+        const detail =
+          plan.reason === 'below-threshold'
+            ? `有新增指纹但均低于阈值 ${webhook.minSeverity}（新增 ${plan.summary.new + plan.summary.ignored.new} 条）`
+            : '本次无新增指纹（diff.added 为空）';
+        log(`⏭️ Webhook 未投递（no-op）：${detail}`);
+      }
+
+      writeDeliveryRecord(
+        outDir,
+        buildNoDeliveryRecord({
+          url: webhook.url,
+          secret: webhook.secret,
+          minSeverity: webhook.minSeverity,
+          reason: plan.reason,
+          summary: plan.summary,
+          deadlineMs: webhook.deadlineMs,
+        })
+      );
+    } else {
+      const payload = buildPayload({
+        version: VERSION,
+        scope,
+        plan,
+        minSeverity: webhook.minSeverity,
+        signed: Boolean(webhook.secret),
+        initial: baselineEstablished,
+      });
+
+      log(
+        `🔔 投递 Webhook 告警：新增 ${plan.summary.new}` +
+          `${baselineEstablished ? '（首轮全量，--webhook-include-initial）' : ''}`
+      );
+
+      const result = await deliverWebhook({
+        url: webhook.url,
+        secret: webhook.secret,
+        body: JSON.stringify(payload),
+        timeoutMs: webhook.timeoutMs,
+        deadlineMs: webhook.deadlineMs,
+        log,
+      });
+
+      writeDeliveryRecord(
+        outDir,
+        buildDeliveryRecord({
+          url: webhook.url,
+          secret: webhook.secret,
+          minSeverity: webhook.minSeverity,
+          summary: plan.summary,
+          result,
+          initial: baselineEstablished,
+        })
+      );
+
+      if (result.ok) {
+        log(
+          `✅ Webhook 已投递：HTTP ${result.statusCode}（尝试 ${result.attempts} 次，${result.durationMs}ms）`
+        );
+      } else {
+        /* 明确报错，但**不改变**退出码：告警通道坏掉不该让监控本身也失败 */
+        console.error(`⚠️ Webhook 投递失败（不影响本次扫描结果）：${result.error}（尝试 ${result.attempts} 次）`);
+        if (result.deadlineExceeded) {
+          console.error(
+            `   原因：投递整体截止时间 ${result.deadlineMs}ms 已到（可用 --webhook-deadline 调整）；` +
+              `扫描产物与退出码不受影响。`
+          );
+        }
+        console.error(`   投递记录：${recordPath}`);
+      }
+    }
+  }
+
+  /* ---- 7. 更新基线 ---- */
   if (args['update-baseline']) {
     mkdirSync(dirname(baselinePath), { recursive: true });
     writeFileSync(
@@ -252,9 +418,9 @@ async function main() {
     log(`💾 基线已更新：${baselinePath}（${findings.length} 条）`);
   }
 
-  /* ---- 7. 门禁判定 ---- */
-  if (failOn && hasAddedAtOrAbove(diff, failOn)) {
-    const top = diff.added
+  /* ---- 8. 门禁判定（只看单一变化源的 added，语义与改造前逐字相同）---- */
+  if (failOn && hasAddedAtOrAbove(changeset, failOn)) {
+    const top = triggerFindings(changeset)
       .filter((f) => compareSeverity(f.severity, failOn) >= 0)
       .map((f) => `  • [${f.severity}] ${f.asset} · ${f.title}`)
       .join('\n');
