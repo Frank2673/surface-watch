@@ -29,7 +29,7 @@ jobs:
           node-version: '20'
 
       - name: 恢复上一次的基线
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: state
           # 每次用新 key，靠 restore-keys 前缀匹配恢复上一次的结果
