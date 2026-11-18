@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全漏洞（私密报告）
+    url: https://github.com/Frank2673/surface-watch/security/advisories/new
+    about: 请勿用公开 issue 报告安全问题，见 SECURITY.md
