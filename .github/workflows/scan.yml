@@ -79,7 +79,7 @@ jobs:
         # 让发现直接出现在仓库 Security 面板：可指派、可标记误报、可跟踪修复，
         # 团队不必打开报告才知道出了问题。
         if: always() && hashFiles('out/results.sarif') != ''
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: out/results.sarif
           # 分类名：同一仓库上传多个工具的 SARIF 时用于区分
