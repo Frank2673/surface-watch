@@ -191,7 +191,7 @@ jobs:
           echo "✅ 门禁阈值语义正确（critical 触发退出码 1）"
 
       - name: 上传演示报告
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: demo-report
           path: out-demo/

@@ -64,7 +64,7 @@ jobs:
 
       - name: 上传报告产物
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: surface-watch-report-${{ github.run_number }}
           # 排除 Webhook 投递记录：它含投递 URL（当前已脱敏为 /前2位*** + urlHash），
